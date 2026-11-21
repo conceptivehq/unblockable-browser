@@ -1,5 +1,5 @@
 ---
-name: Browser steps
+name: Unblockable browser steps
 description: The fifteen browser/* steps a Strut workflow uses on the unblockable browser, as declared steps or as an agent's tools, and what each one does on the browser.
 parents:
   - Unblockable browser

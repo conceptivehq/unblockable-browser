@@ -1,6 +1,6 @@
 {
   "name": "unblockable-browser-strut",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Strut's browser: a StrutBrowser that drives the unblockable browser through Browser MCP.",
   "license": "Apache-2.0",

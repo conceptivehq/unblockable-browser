@@ -9,6 +9,8 @@ import { Browser, FIND_FN, pageOf, plainError, textUnder, treeOf } from "../src/
 import { browserOptionsFromEnv, researchBrowser } from "../src/browser-env.js";
 
 const FAKE = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+// The kit's broker and its MCP-over-HTTP front, for Strut's browser over HTTP (the kit's container runs the same two).
+const KIT_BIN = new URL("../../kits/unblockable-browser/bin/", import.meta.url);
 
 describe("Strut's browser: the browser verbs through the browser's Browser MCP server", () => {
   let dir: string;
@@ -222,6 +224,78 @@ describe("Strut's browser: the browser verbs through the browser's Browser MCP s
   });
 });
 
+describe("Strut's browser over HTTP: the kit's front and broker in front of the browser's server", () => {
+  const TOKEN = "s".repeat(24) + "0123456789abcdef";
+  let dir: string;
+  let logPath: string;
+  let broker: any;
+  let front: any;
+  let url: string;
+  let browser: Browser;
+  const named = async (name: string) =>
+    (await readFile(logPath, "utf8").catch(() => ""))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { name: string; args: Record<string, any>; env?: Record<string, string> })
+      .filter((c) => c.name === name);
+
+  before(async () => {
+    // A short folder: a Unix socket's path has a length limit.
+    dir = await mkdtemp(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "bh-"));
+    logPath = join(dir, "calls.jsonl");
+    const { createBroker } = await import(new URL("browser-broker.mjs", KIT_BIN).href);
+    const { createFront, readSettings } = await import(new URL("browser-mcp-http.mjs", KIT_BIN).href);
+    const socketPath = join(dir, "b.sock");
+    broker = createBroker({ socketPath, upstream: [process.execPath, FAKE], env: { ...process.env, FAKE_BROWSER_LOG: logPath, BROWSER_PROFILE: "browser", BROWSER_PORT: "21300" } });
+    await broker.listen();
+    front = createFront(readSettings({ BROWSER_MCP_TOKEN: TOKEN, BROWSER_MCP_SOCKET: socketPath, BROWSER_MCP_HTTP_PORT: "0" }));
+    const addr = await front.listen();
+    url = `http://127.0.0.1:${addr.port}/mcp`;
+    browser = new Browser({ mcp: { url, token: TOKEN }, settle: { fixedMs: 0, quiet: false } });
+  });
+  after(async () => {
+    await browser.close();
+    await front.close();
+    await broker.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("drives the browser's page over HTTP as it does over stdio", async () => {
+    const out = await browser.open("run-h", { url: "https://example.com/pricing" });
+    assert.deepEqual(out, { url: "https://example.com/pricing", title: "Title of /pricing", status: 200, resumed: false });
+    assert.deepEqual((await named("new_page"))[0]!.env, { profile: "browser", port: "21300" });
+    const snap = await browser.snapshot("run-h");
+    assert.match(snap.tree, /button "Go" \[ref=e8\]/);
+    assert.deepEqual(await browser.click("run-h", { ref: "e8" }), { url: "https://example.com/pricing" });
+    assert.equal((await named("click")).at(-1)!.args.uid, "@e8");
+    await assert.rejects(browser.goto("run-h", { url: "http://127.0.0.1:4190/runs" }), /refused/);
+    assert.equal(front.sessions.size, 1, "one session for the host");
+  });
+
+  it("opens a new session when the front no longer knows its session", async () => {
+    for (const s of front.sessions.values()) s.close?.();
+    front.sessions.clear();
+    assert.deepEqual(await browser.text("run-h"), { text: "Hello from the page" });
+    assert.equal(front.sessions.size, 1);
+  });
+
+  it("refuses a wrong token without printing it", async () => {
+    const wrong = "w".repeat(40);
+    const other = new Browser({ mcp: { url, token: wrong } });
+    const err = await other.open("run-x", { url: "https://example.com/" }).then(() => undefined, (e: Error) => e);
+    assert.ok(err, "the call is refused");
+    assert.match(err!.message, /refused this host \(401\): check BROWSER_MCP_TOKEN/);
+    assert.ok(!err!.message.includes(wrong));
+    await other.close();
+  });
+
+  it("says when the browser's server is not reachable", async () => {
+    const gone = new Browser({ mcp: { url: "http://127.0.0.1:9/mcp", token: TOKEN } });
+    await assert.rejects(gone.open("run-y", { url: "https://example.com/" }), /not reachable/);
+    await gone.close();
+  });
+});
+
 describe("Strut's browser: parsing and settings", () => {
   it("reads the browser's page lines and its aria snapshot", () => {
     assert.deepEqual(pageOf("Navigated page 5 (url)\nTab ID: 5\nTitle: A\nURL: https://a.test/"), { tab: 5, title: "A", url: "https://a.test/" });
@@ -249,6 +323,28 @@ describe("Strut's browser: parsing and settings", () => {
     // The names from before 0.8.0 still work for one release.
     const old = browserOptionsFromEnv({ ["BROWSER_" + "LANE_PROFILE"]: "strut", ["BROWSER_" + "LANE_PORT"]: "21203", ["BROWSER_" + "LANE_ROOT"]: "/srv/old" }, { home: "/home/fleet" });
     assert.deepEqual({ root: old.unblockable!.root, profile: old.unblockable!.profile, port: old.unblockable!.port }, { root: "/srv/old", profile: "strut", port: 21203 });
+  });
+
+  it("uses the browser over HTTP when BROWSER_MCP_URL is set, and only one browser", () => {
+    const token = "k".repeat(40);
+    const opts = browserOptionsFromEnv({ BROWSER_MCP_URL: "http://127.0.0.1:8930/mcp", BROWSER_MCP_TOKEN: token }, { home: "/home/fleet" });
+    assert.deepEqual(opts.unblockable!.mcp, { url: "http://127.0.0.1:8930/mcp", token });
+    assert.equal(opts.unblockable!.root, undefined);
+    assert.ok(researchBrowser(opts) instanceof Browser);
+    assert.throws(() => researchBrowser({ ...opts, cdpUrl: "http://127.0.0.1:9222" }), /not both/);
+    assert.throws(() => researchBrowser(browserOptionsFromEnv({ BROWSER_MCP_URL: "http://127.0.0.1:8930/mcp", BROWSER_MCP_TOKEN: token, BROWSER_PROFILE: "strut" })), /BROWSER_MCP_URL .* or BROWSER_PROFILE .*not both/);
+    assert.throws(() => researchBrowser(browserOptionsFromEnv({ BROWSER_MCP_URL: "http://127.0.0.1:8930/mcp" })), /BROWSER_MCP_TOKEN must be set/);
+    assert.throws(() => new Browser({ mcp: { url: "ftp://h/mcp", token } }), /http:\/\/ or https:\/\//);
+    assert.throws(() => new Browser({ mcp: { url: "not a url", token } }), /http:\/\/ or https:\/\//);
+    const err = (() => {
+      try {
+        new Browser({ mcp: { url: `https://user:${token}@h/mcp`, token } });
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    assert.match(err!.message, /must not hold a sign-in/);
+    assert.ok(!err!.message.includes(token));
   });
 
   it("names the browser when no browser is set up", () => {

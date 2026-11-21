@@ -40,12 +40,20 @@ node="${BROWSER_NODE:-$HOME/.local/bin/node}"
 [[ "$node" == /* && -x "$node" ]] || node="$(command -v node || true)"
 [[ -n "$node" && -x "$node" ]] || die 'Node.js was not found (set BROWSER_NODE)' 69
 
-# Hermes passes XDG_* through; without it systemctl --user cannot find this user's manager.
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-unit="fleet-browser@${profile}.service"
-if ! systemctl --user is-active --quiet "$unit"; then
-  systemctl --user start "$unit" || die "could not start $unit" 69
-fi
+# Who keeps the browser's Chromium running: systemd (fleet-browser@<profile>.service, the default), or none when
+# something else starts it first, such as the container's entrypoint (docker/entrypoint.sh).
+case "${BROWSER_SUPERVISOR:-systemd}" in
+  systemd)
+    # Hermes passes XDG_* through; without it systemctl --user cannot find this user's manager.
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    unit="fleet-browser@${profile}.service"
+    if ! systemctl --user is-active --quiet "$unit"; then
+      systemctl --user start "$unit" || die "could not start $unit" 69
+    fi
+    ;;
+  none) ;;
+  *) die 'BROWSER_SUPERVISOR must be systemd or none' ;;
+esac
 
 exec "$node" "$cli" start \
   --extension-port "$port" \

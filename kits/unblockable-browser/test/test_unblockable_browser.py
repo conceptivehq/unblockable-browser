@@ -727,6 +727,17 @@ class ServerTests(HomeCase):
         self.assertEqual(self.adapter(FAKE_ACTIVE="0").returncode, 0)
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
 
+    def test_without_a_supervisor_no_unit_is_touched(self):
+        if self.program != "browser-server":
+            self.skipTest("only the server reads BROWSER_SUPERVISOR")
+        proc = self.adapter(BROWSER_SUPERVISOR="none")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--require-extension", proc.stdout)
+        self.assertFalse(self.log.exists(), "systemctl is never called in a container")
+        bad = self.adapter(BROWSER_SUPERVISOR="docker")
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertNotIn("node ", bad.stdout)
+
     def test_refusals(self):
         link = self.h.home / "link"
         link.symlink_to(self.h.root)

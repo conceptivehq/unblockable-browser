@@ -8,6 +8,11 @@ The installer kit (kits/unblockable-browser) downloads and builds Browser MCP
 (https://github.com/getcabal/browser-mcp, Apache License 2.0) at a pinned
 commit. Browser MCP is not included in this repository.
 
+kits/unblockable-browser/docker/chromium-seccomp.json is Docker's default
+seccomp profile from moby/profiles (https://github.com/moby/profiles, commit
+a0fa70805f742f7da15b367770d802ea2a86c68b, Apache License 2.0) with one rule
+added, which allows the namespace calls Chromium's sandbox makes.
+
 strut/ is written against Strut (https://github.com/stakwork/strut, Apache
 License 2.0). Its setup script fetches Strut at a pinned commit for building
 and testing; Strut is not included in this repository.

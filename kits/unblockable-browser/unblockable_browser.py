@@ -60,7 +60,7 @@ UNIT_MARKER = "# Written by the unblockable browser kit"
 KIT_MARKER_RE = re.compile(r"^# Written by \S+ (?:unblockable browser|browser lane) kit", re.M)
 # The kit's programs, copied into <root>/bin: (name, mode).
 BIN_FILES = (("browser-mcp", 0o755), ("browser-server", 0o755), ("browser-broker.mjs", 0o644),
-             ("browser-chromium", 0o755), ("proxy-forward.mjs", 0o644))
+             ("browser-chromium", 0o755), ("proxy-forward.mjs", 0o644), ("browser-mcp-http.mjs", 0o644))
 # browser-mcp's own suites the kit may run with --with-tests. Left out on purpose: browser-e2e (it launches a
 # headless Chromium, which the fleet never runs) and hermes-wrapper (it tests the macOS zsh adapter the kit replaces).
 SAFE_TESTS = (

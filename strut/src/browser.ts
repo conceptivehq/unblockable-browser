@@ -7,8 +7,10 @@
  *
  * The chain: this host spawns the kit's stdio adapter (<root>/bin/browser-mcp) once and keeps it; the adapter
  * starts the browser's broker if it is not running, the broker its one Browser MCP server, the server the browser's
- * Chromium. The browser runs in window mode (BROWSER_MCP_PAGE_ISOLATION=window), so each run's page is a window of its
- * own and every call names its tab.
+ * Chromium. Or, for the kit's container (or any browser behind the kit's bin/browser-mcp-http.mjs), the host speaks
+ * MCP's Streamable HTTP to its /mcp URL with a bearer token (BROWSER_MCP_URL, BROWSER_MCP_TOKEN). The browser runs in
+ * window mode (BROWSER_MCP_PAGE_ISOLATION=window), so each run's page is a window of its own and every call names its
+ * tab.
  *
  * What differs from the Playwright service, by design or because the browser has no such tool:
  *   - refs come from the browser's own snapshot (`[ref=eN]`, as Strut's); a page longer than the browser's 800 lines lists
@@ -33,11 +35,13 @@ type Target = { ref?: string; selector?: string };
 type Navigated = { url: string; title: string; status: number };
 
 export interface BrowserOptions {
-  /** The kit's root (BROWSER_ROOT), Strut's browser (BROWSER_PROFILE, BROWSER_PORT) and Node. */
-  root: string;
-  profile: string;
-  port: number;
+  /** The kit's root (BROWSER_ROOT), Strut's browser (BROWSER_PROFILE, BROWSER_PORT) and Node: the browser on this host. */
+  root?: string;
+  profile?: string;
+  port?: number;
   node?: string;
+  /** Or the browser over MCP's Streamable HTTP (BROWSER_MCP_URL, BROWSER_MCP_TOKEN), such as the kit's container. */
+  mcp?: { url: string; token: string };
   /** PATH and HOME for the adapter: the host's own environment is cleared before the host is built. */
   env?: Record<string, string>;
   stepTimeoutMs?: number;
@@ -70,8 +74,23 @@ interface ToolAnswer {
   images: Array<{ data: string; mimeType: string }>;
 }
 
+/** What Browser needs of an MCP client: tool calls, and closing. */
+interface McpClient {
+  call(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolAnswer>;
+  close(): void;
+}
+
+/** A tool call's result, as both clients read it. */
+function toolAnswer(name: string, result: any): ToolAnswer {
+  const content: any[] = Array.isArray(result?.content) ? result.content : [];
+  const text = content.filter((c) => c.type === "text").map((c) => String(c.text ?? "")).join("\n");
+  if (result?.isError) throw new Error(plainError(text.replace(/^Error:\s*/, "").split("\n")[0] || `${name} failed`));
+  const images = content.filter((c) => c.type === "image" && typeof c.data === "string").map((c) => ({ data: c.data as string, mimeType: String(c.mimeType ?? "") }));
+  return { text, images };
+}
+
 /** A minimal MCP client on the adapter's stdio: one JSON-RPC message per line. */
-class BrowserClient {
+class BrowserClient implements McpClient {
   private child?: ChildProcess;
   private ready?: Promise<void>;
   private buf = "";
@@ -161,12 +180,7 @@ class BrowserClient {
 
   async call(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolAnswer> {
     await this.connect();
-    const result = await this.request("tools/call", { name, arguments: args }, timeoutMs);
-    const content: any[] = Array.isArray(result?.content) ? result.content : [];
-    const text = content.filter((c) => c.type === "text").map((c) => String(c.text ?? "")).join("\n");
-    if (result?.isError) throw new Error(plainError(text.replace(/^Error:\s*/, "").split("\n")[0] || `${name} failed`));
-    const images = content.filter((c) => c.type === "image" && typeof c.data === "string").map((c) => ({ data: c.data as string, mimeType: String(c.mimeType ?? "") }));
-    return { text, images };
+    return toolAnswer(name, await this.request("tools/call", { name, arguments: args }, timeoutMs));
   }
 
   close(): void {
@@ -176,6 +190,122 @@ class BrowserClient {
     if (!child) return;
     child.stdin?.end();
     setTimeout(() => child.kill(), 500).unref();
+  }
+}
+
+/** The session is gone on the server (404): the request never ran, so it may be sent again in a new session. */
+class SessionGone extends Error {}
+
+/**
+ * A minimal MCP client on Streamable HTTP: one POST per message, the session in Mcp-Session-Id, the bearer token in
+ * Authorization. An answer comes back as JSON or as a server-sent event stream; both are read. A session the server
+ * no longer knows is opened again once (the call never ran in it). The token is never part of an error.
+ */
+class HttpBrowserClient implements McpClient {
+  private session?: string;
+  private protocol?: string;
+  private ready?: Promise<void>;
+  private next = 0;
+
+  constructor(
+    private readonly url: string,
+    private readonly token: string,
+  ) {}
+
+  private async post(msg: { id?: number; method: string; params?: unknown }, timeoutMs: number): Promise<any> {
+    let res: Response;
+    try {
+      res = await fetch(this.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${this.token}`,
+          ...(this.session ? { "mcp-session-id": this.session } : {}),
+          ...(this.protocol ? { "mcp-protocol-version": this.protocol } : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", ...msg }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      const err = e as Error & { cause?: { code?: string } };
+      if (err.name === "TimeoutError" || err.name === "AbortError") throw new Error(`timed out after ${timeoutMs} ms`);
+      throw new Error(`the browser's MCP server is not reachable (${err.cause?.code ?? err.message})`);
+    }
+    if (res.status === 404 && this.session) {
+      this.session = undefined;
+      this.ready = undefined;
+      throw new SessionGone("the browser's MCP session ended");
+    }
+    if (res.status === 401 || res.status === 403) throw new Error(`the browser's MCP server refused this host (${res.status}): check BROWSER_MCP_TOKEN`);
+    if (msg.id === undefined) {
+      if (res.status >= 300) throw new Error(`the browser's MCP server answered ${res.status} to ${msg.method}`);
+      return undefined;
+    }
+    const type = res.headers.get("content-type") ?? "";
+    const body = await res.text();
+    let answer: any;
+    if (type.startsWith("text/event-stream")) {
+      for (const event of body.split(/\r?\n\r?\n/)) {
+        const data = event
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart())
+          .join("\n");
+        if (!data) continue;
+        try {
+          const m = JSON.parse(data);
+          if (m?.id === msg.id) answer = m;
+        } catch {}
+      }
+    } else {
+      try {
+        answer = JSON.parse(body);
+      } catch {}
+    }
+    if (!answer || answer.id !== msg.id) throw new Error(`the browser's MCP server answered ${res.status} without an answer to ${msg.method}`);
+    if (answer.error) throw new Error(String(answer.error.message ?? JSON.stringify(answer.error)));
+    if (msg.method === "initialize") {
+      this.session = res.headers.get("mcp-session-id") ?? undefined;
+      this.protocol = typeof answer.result?.protocolVersion === "string" ? answer.result.protocolVersion : undefined;
+    }
+    return answer.result;
+  }
+
+  private connect(): Promise<void> {
+    if (this.ready) return this.ready;
+    const ready = (async () => {
+      this.session = undefined;
+      this.protocol = undefined;
+      // The first initialize may wait for the browser's server to start and its extension to connect.
+      await this.post({ id: ++this.next, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "strut-browser", version: "1" } } }, 120_000);
+      await this.post({ method: "notifications/initialized" }, 30_000);
+    })();
+    this.ready = ready;
+    ready.catch(() => {
+      if (this.ready === ready) this.ready = undefined;
+    });
+    return ready;
+  }
+
+  async call(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolAnswer> {
+    for (let attempt = 0; ; attempt++) {
+      await this.connect();
+      try {
+        return toolAnswer(name, await this.post({ id: ++this.next, method: "tools/call", params: { name, arguments: args } }, timeoutMs));
+      } catch (e) {
+        if (e instanceof SessionGone && attempt === 0) continue;
+        throw e;
+      }
+    }
+  }
+
+  close(): void {
+    const session = this.session;
+    this.session = undefined;
+    this.ready = undefined;
+    if (!session) return;
+    fetch(this.url, { method: "DELETE", headers: { authorization: `Bearer ${this.token}`, "mcp-session-id": session }, signal: AbortSignal.timeout(5_000) }).catch(() => {});
   }
 }
 
@@ -366,7 +496,7 @@ function sharpOf(): any {
 
 /** Strut's browser verbs (`StrutBrowser`, Strut d4e6595 and later): a change to a verb in Strut fails this build. */
 export class Browser implements StrutBrowser {
-  private readonly client: BrowserClient;
+  private readonly client: McpClient;
   private readonly runs = new Map<string, Run>();
   private readonly stepTimeoutMs: number;
   private readonly runBudgetMs: number;
@@ -377,22 +507,39 @@ export class Browser implements StrutBrowser {
   private token = 0;
 
   constructor(private readonly opts: BrowserOptions) {
-    if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(opts.profile)) throw new Error("BROWSER_PROFILE must match ^[a-z0-9][a-z0-9-]{0,40}$");
-    if (!Number.isInteger(opts.port) || opts.port < 1024 || opts.port > 65535) throw new Error("BROWSER_PORT must be a port from 1024 to 65535");
-    if (!opts.root.startsWith("/")) throw new Error("BROWSER_ROOT must be an absolute path");
+    if (opts.mcp) {
+      if (opts.profile || opts.command) throw new Error("browser: set BROWSER_MCP_URL (a browser over HTTP) or BROWSER_PROFILE (the browser on this host), not both");
+      let url: URL;
+      try {
+        url = new URL(opts.mcp.url);
+      } catch {
+        throw new Error("BROWSER_MCP_URL must be an http:// or https:// URL");
+      }
+      if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("BROWSER_MCP_URL must be an http:// or https:// URL");
+      if (url.username || url.password) throw new Error("BROWSER_MCP_URL must not hold a sign-in: the token goes in BROWSER_MCP_TOKEN");
+      if (!opts.mcp.token || /\s/.test(opts.mcp.token)) throw new Error("BROWSER_MCP_TOKEN must be set (the browser's bearer token, without spaces)");
+    } else {
+      if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(opts.profile ?? "")) throw new Error("BROWSER_PROFILE must match ^[a-z0-9][a-z0-9-]{0,40}$");
+      if (!Number.isInteger(opts.port) || opts.port! < 1024 || opts.port! > 65535) throw new Error("BROWSER_PORT must be a port from 1024 to 65535");
+      if (!opts.root?.startsWith("/")) throw new Error("BROWSER_ROOT must be an absolute path");
+    }
     this.stepTimeoutMs = opts.stepTimeoutMs ?? 15_000;
     this.runBudgetMs = opts.runBudgetMs ?? 4 * 60 * 60 * 1000;
     this.denier = new BrowserService({ deny: opts.deny ?? HOST_URL_DENY });
     this.fixedMs = opts.settle?.fixedMs ?? 150;
     this.quiet = opts.settle?.quiet ?? true;
+    if (opts.mcp) {
+      this.client = new HttpBrowserClient(opts.mcp.url, opts.mcp.token);
+      return;
+    }
     const env: Record<string, string> = {
       ...(opts.env ?? {}),
-      BROWSER_ROOT: opts.root,
-      BROWSER_PROFILE: opts.profile,
+      BROWSER_ROOT: opts.root!,
+      BROWSER_PROFILE: opts.profile!,
       BROWSER_PORT: String(opts.port),
       ...(opts.node ? { BROWSER_NODE: opts.node } : {}),
     };
-    const command = opts.command ?? { file: join(opts.root, "bin", "browser-mcp"), args: [] };
+    const command = opts.command ?? { file: join(opts.root!, "bin", "browser-mcp"), args: [] };
     this.client = new BrowserClient(() => spawn(command.file, command.args, { env, stdio: ["pipe", "pipe", "pipe"] }));
   }
 

@@ -18,7 +18,7 @@ browser/* step ─▶ Strut host (Browser) ─stdio─▶ browser-mcp ─unix so
 
 ## The steps
 
-Every workflow here is made of Strut's own `browser/*` steps, so the same toolset works in any workflow: as declared steps with selectors, or as an agent's tools with refs. See the Concept *Browser steps* for what each one does on the browser.
+Every workflow here is made of Strut's own `browser/*` steps, so the same toolset works in any workflow: as declared steps with selectors, or as an agent's tools with refs. See the Concept *Unblockable browser steps* for what each one does on the browser.
 
 | Read | Act | Wait and keep |
 | --- | --- | --- |

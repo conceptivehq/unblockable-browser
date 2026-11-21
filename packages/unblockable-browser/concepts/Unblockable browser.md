@@ -11,4 +11,4 @@ The unblockable browser gives Strut a real browser of its own on a headless Linu
 
 The chain: a `browser/*` step → Strut's host (`Browser`) → stdio `browser-mcp` → the broker → the server on 127.0.0.1:<port> ⇄ the extension in Strut's Chromium on Xvfb.
 
-The browser never uses `--headless`, `--remote-debugging-port` or `--remote-debugging-pipe`, never shares a profile folder, and never puts a credential on a command line. The kit's `kits/unblockable-browser/unblockable_browser.py` installs it from a config file (a browser with `"client": "strut"`), and the host uses it when `BROWSER_PROFILE` and `BROWSER_PORT` are set. Every workflow in this package drives it with the [[Browser steps]].
+The browser never uses `--headless`, `--remote-debugging-port` or `--remote-debugging-pipe`, never shares a profile folder, and never puts a credential on a command line. The kit's `kits/unblockable-browser/unblockable_browser.py` installs it from a config file (a browser with `"client": "strut"`), and the host uses it when `BROWSER_PROFILE` and `BROWSER_PORT` are set. Every workflow in this package drives it with the [[Unblockable browser steps]].

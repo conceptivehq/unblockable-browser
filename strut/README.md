@@ -20,20 +20,21 @@ const strut = await createStrut({
 // on shutdown: await browser.close();
 ```
 
-`researchBrowser` gives Strut's browser when `BROWSER_PROFILE` is set, a Playwright server when `BROWSER_WS_URL` or `BROWSER_CDP_URL` is set (refusing both at once), and otherwise a browser that refuses every call with the reason. It never launches a headless browser.
+`researchBrowser` gives Strut's browser when `BROWSER_PROFILE` or `BROWSER_MCP_URL` is set, a Playwright server when `BROWSER_WS_URL` or `BROWSER_CDP_URL` is set (refusing both at once), and otherwise a browser that refuses every call with the reason. It never launches a headless browser.
 
 | Setting | Value |
 |---|---|
 | `BROWSER_PROFILE`, `BROWSER_PORT` | the browser's profile and port from the kit's config file, such as `strut` and `21203` |
 | `BROWSER_ROOT` | optional, default `~/.local/share/unblockable-browser` |
 | `BROWSER_NODE` | optional: the Node.js the browser's broker runs on |
+| `BROWSER_MCP_URL`, `BROWSER_MCP_TOKEN` | in place of the four above: a browser over MCP's Streamable HTTP, such as the kit's container (`docs/unblockable-browser.md`, "The container"), and its bearer token |
 | `BROWSER_RUN_BUDGET_MS`, `BROWSER_STEP_TIMEOUT_MS`, `BROWSER_URL_DENY` | as for Strut's Playwright browser |
 
 The kit's `plan` prints the first four for a `client: strut` browser. Restart Strut only when no run is active.
 
 ## How it reaches the page
 
-The host spawns the kit's stdio adapter (`<root>/bin/browser-mcp`) once and keeps it. The adapter starts the browser's broker, the broker its one Browser MCP server, and the server the browser's Chromium. Each run gets a window of its own and every call names its tab; a run's calls take turns in the order they were sent.
+The host spawns the kit's stdio adapter (`<root>/bin/browser-mcp`) once and keeps it. The adapter starts the browser's broker, the broker its one Browser MCP server, and the server the browser's Chromium. With `BROWSER_MCP_URL`, the host instead posts each message to the URL with the token (MCP's Streamable HTTP, one session, opened again if the server forgets it) and closes the session on shutdown. Each run gets a window of its own and every call names its tab; a run's calls take turns in the order they were sent.
 
 ## Where it differs from Strut's Playwright browser
 

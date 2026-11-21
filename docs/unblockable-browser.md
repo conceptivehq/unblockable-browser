@@ -81,6 +81,72 @@ On the server, as the user who runs the Hermes gateway (with `loginctl enable-li
 
 A browser with `"client": "strut"` is Strut's: Strut's host is its only client, and its research verbs (`browser/*`) drive it instead of a Playwright server (`strut/README.md`). The kit gives it `BROWSER_MCP_PAGE_ISOLATION=window`, so each run works in a window of its own, and prints the host settings to add (`BROWSER_ROOT`, `BROWSER_PROFILE`, `BROWSER_PORT`, `BROWSER_NODE`) instead of a Hermes block. Restart Strut once `/runs/active` is `[]`.
 
+Strut's host can instead reach a browser over HTTP, such as the container below: set `BROWSER_MCP_URL` (`http://127.0.0.1:8930/mcp`) and `BROWSER_MCP_TOKEN` in place of `BROWSER_PROFILE` and the rest. The host then speaks MCP's Streamable HTTP to it with the token, and the verbs work as they do over stdio. Setting both kinds refuses to start.
+
+## MCP over HTTP
+
+`bin/browser-mcp-http.mjs` serves a browser's MCP over HTTP, for a client on another machine or in another container: MCP's Streamable HTTP at `POST /mcp`, behind a bearer token. It is plain Node with no packages, and it talks to the browser's broker, so its clients share the browser's one Browser MCP server with any stdio client. The container below runs it; on a host with the kit installed, run it as the browser's user beside the broker.
+
+| Setting | Value |
+|---|---|
+| `BROWSER_MCP_TOKEN_FILE` or `BROWSER_MCP_TOKEN` | the bearer token, 32 or more characters without spaces. Prefer the file (the token then stays out of the process environment); either way it is never logged or printed. |
+| `BROWSER_MCP_SOCKET` | optional: the broker's socket, default `<BROWSER_ROOT>/run/<BROWSER_PROFILE>.sock` |
+| `BROWSER_MCP_HTTP_HOST`, `BROWSER_MCP_HTTP_PORT` | optional: where it listens, default `127.0.0.1` and `8930` |
+| `BROWSER_MCP_SESSIONS` | optional: the most sessions open at once, default 16 |
+| `BROWSER_MCP_IDLE_MS`, `BROWSER_MCP_CALL_MS` | optional: a session's idle limit (default 30 minutes) and a call's (default 10 minutes; a call past it is cancelled on the server) |
+| `BROWSER_MCP_ALLOWED_ORIGINS` | optional: browser origins allowed to call, comma separated; a request with any other `Origin` header is refused |
+
+What a client sees:
+
+- `initialize` without a session opens one and answers with its `Mcp-Session-Id`; every later message carries it. `DELETE /mcp` with the header ends it. An unknown session gets 404, so the client initializes again.
+- Every answer is one JSON body (`application/json`). There is no server stream: `GET /mcp` gets 405, and the server's own notices are not passed on. Batches are refused (400), and a body over 4 MB gets 413.
+- A wrong or missing token gets 401, compared in constant time.
+- `GET /healthz` (no token) answers 200 once the broker's socket exists, else 503.
+- Each session is one connection to the broker. If the browser's server ends, pending calls fail and the next call reconnects in the same session; the broker starts a new server.
+- The log names each call's method or tool, whether it worked and how long it took, never its arguments or answer.
+
+It is plain HTTP: keep it on loopback, a private network, or behind a TLS proxy that keeps the `Authorization` header.
+
+## The container
+
+`kits/unblockable-browser/docker/Dockerfile` builds the whole browser as one image: Xvfb, Debian's Chromium (visible on the virtual screen, never headless, no remote-debugging port or pipe), Browser MCP at a pinned commit with its extension stamped for the image's profile and port, the broker, and MCP over HTTP on port 8930. The extension's port stays on the container's loopback; only the HTTP front is published. A Strut server reaches it with `BROWSER_MCP_URL` and `BROWSER_MCP_TOKEN` (*Strut's browser*, above), and any MCP client that speaks Streamable HTTP can use it the same way.
+
+Build it from the kit's folder (the build fetches Browser MCP from its public repository):
+
+```sh
+docker build -t unblockable-browser -f kits/unblockable-browser/docker/Dockerfile kits/unblockable-browser
+```
+
+Build arguments: `BROWSER_MCP_COMMIT` (a full commit), `BROWSER_MCP_REPO`, and `BROWSER_PROFILE` and `BROWSER_PORT` (default `browser` and `21300`), which are stamped into the extension and so fixed for the image. `NODE_IMAGE` picks the base, default `node:22-bookworm-slim`.
+
+Run it with a token file the container's user (uid 10001) can read, and the kit's seccomp profile:
+
+```sh
+openssl rand -base64 33 | tr -d '\n' > browser-mcp-token        # outside Git
+sudo install -m 400 -o 10001 -g 10001 browser-mcp-token /srv/secrets/browser-mcp-token
+docker run -d --name unblockable-browser --restart unless-stopped \
+  --shm-size 1g \
+  --security-opt seccomp=kits/unblockable-browser/docker/chromium-seccomp.json \
+  --security-opt no-new-privileges \
+  -p 127.0.0.1:8930:8930 \
+  -v unblockable-browser-profile:/opt/unblockable-browser/profiles \
+  -v /srv/secrets/browser-mcp-token:/run/secrets/browser-mcp-token:ro \
+  -e BROWSER_MCP_TOKEN_FILE=/run/secrets/browser-mcp-token \
+  unblockable-browser
+```
+
+- **The seccomp profile.** Chromium's sandbox makes user, PID and network namespaces as the unprivileged browser user, which Docker's default profile refuses ("No usable sandbox"). `chromium-seccomp.json` is Docker's default profile (moby/profiles at `a0fa708`) with one rule added that allows `clone`, `setns` and `unshare`; everything else is as Docker ships it. The browser keeps its sandbox: the image never passes `--no-sandbox`. With `no-new-privileges` nothing in the container can gain privileges.
+- **`--shm-size 1g`.** Docker's 64 MB `/dev/shm` is too small for Chromium's renderers.
+- **The profile volume** keeps sign-ins and cookies across restarts and image updates. Only one container may use it at a time; the container clears Chromium's stale single-instance lock when it starts.
+- **The first `initialize`** waits for Browser MCP's server to start and the extension to connect, about ten seconds on a cold start; later ones answer at once.
+- **Restarts.** The container restarts Chromium itself when it exits. If the broker, the HTTP front or the proxy forwarder ends, the container ends and its restart policy starts it again. The health check reads `/healthz`.
+- **Logs** (`docker logs`) carry the front's call lines and Chromium's own messages; nothing writes the token or the proxy's sign-in.
+
+**The proxy.** Set `PROXY_HOSTS` (comma separated, as `pac_hosts`) and either mount an env file and point `PROXY_ENV_FILE` at it (`PROXY_SERVER`, and `PROXY_USERNAME` and `PROXY_PASSWORD` for a password proxy; readable by uid 10001), or set `PROXY_SERVER` directly for an allowlist proxy. A password proxy runs through the kit's forwarder on the container's loopback (`FORWARD_PORT`, default 3128), so the sign-in never reaches Chromium or its PAC file, and the file keeps it out of the container's environment. As on a host, only the listed hosts and their subdomains use the proxy.
+
+**Not yet in the container:** a VNC view for CAPTCHA help (at a human check a step times out and says so, as everywhere), several browsers in one container (run one container per browser, each with its own volume and port), and the kit's `verify`. On Linux with the default bridge network, `-p 127.0.0.1:8930:8930` publishes the front on the host's loopback only; with `--network host`, set `BROWSER_MCP_HTTP_HOST=127.0.0.1` so the front does not listen on every address.
+
+
 ## Older names
 
 Earlier releases called a browser a *lane*, and then an *own browser* (`OWN_BROWSER_*`, `bin/own-browser-*`); now it is a browser. The *own browser* names are not read. For one more release the lane names still work: `BROWSER_LANE_ROOT`, `BROWSER_LANE_PROFILE`, `BROWSER_LANE_PORT` and `BROWSER_LANE_NODE` where the `BROWSER_*` one is unset (in `browser-mcp` and in Strut's host), a config file's `lanes` list in place of `browsers`, and `verify` and `remove` recognise units written with an earlier marker line. A host installed earlier moves over by stopping its units, renaming `~/.local/share/fleet-browser-lane` to `~/.local/share/unblockable-browser` and `~/.config/fleet-browser-lane` to `~/.config/unblockable-browser` (profiles and cookies move with them), setting `root` and `env_file` in the config file, applying, pointing each profile's `mcp_servers.browser` at `<root>/bin/browser-mcp` with the new names, and restarting the units; then delete the old `bin/browser-lane-*` (or `bin/own-browser-*`) files and `<root>/lanes`. A host on the *own browser* names renames `OWN_BROWSER_*` to `BROWSER_*` in its settings and profiles, applies, and deletes `bin/own-browser-*`; its folders already have their names.
@@ -121,7 +187,7 @@ Agents stop at a CAPTCHA or human check and say so; they never solve or get arou
 | `search-site` | declared | Fills a search box by selector, presses Enter, waits, reads and photographs the results. |
 | `explore` | agent | An `agent` whose only tools are the fifteen `browser/*` steps (`toolFilter: ["none"]`, `mcp: false`) answers a goal with screenshots as evidence, and reports any CAPTCHA page in `blocked`. |
 
-None signs in, buys, posts, changes a setting or solves a CAPTCHA. The Concept *Browser steps* lists what each step does on the browser.
+None signs in, buys, posts, changes a setting or solves a CAPTCHA. The Concept *Unblockable browser steps* lists what each step does on the browser.
 
 `node --import <strut>/node_modules/tsx/dist/esm/index.mjs packages/check-package.mjs <strut> packages/unblockable-browser` proves the package against a Strut checkout: it reads it, installs it, dry-runs its build and runs each workflow with a stand-in browser (and a stand-in agent). On a host that hands Strut its own step registry, Strut refuses every package install (`409 Installing is disabled when the registry is provided at construction time`); on such a host, publish the workflow YAML the way the org publishes its other workflows. The package is the portable form for a Strut that installs packages.
 
@@ -131,7 +197,7 @@ To see a Hermes agent's browser work, ask the agent in chat to open a page with 
 
 - Never runs Chromium headless and never opens a remote-debugging port or pipe; the launcher refuses either flag even if one reached its command line, and the unit renderer refuses a template carrying one.
 - Never shares a user-data folder, extension copy or port between profiles.
-- Never listens off loopback (the MCP server, the forwarder and VNC).
+- Never listens off loopback (the MCP server, the forwarder and VNC). The one exception is the container's HTTP front, which listens on the container's own network behind its token; publish it on the host's loopback or a private network.
 - Never puts a credential on a command line, in Git, in a log or in its output.
 - Never writes outside `root` and `~/.config/systemd/user/`, never follows or writes a symlink there, and copies files physically.
 - Never edits Hermes config, never restarts a gateway, and never starts a unit without `--start`.

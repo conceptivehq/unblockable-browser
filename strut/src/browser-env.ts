@@ -1,7 +1,8 @@
 /**
  * The browser Strut's browser steps drive on this host, chosen from the BROWSER_* environment: Strut's unblockable
- * browser (BROWSER_PROFILE and BROWSER_PORT, browser.ts), a Playwright server (BROWSER_WS_URL and BROWSER_WS_PATH) or a
- * real Chrome (BROWSER_CDP_URL). Strut's own fallback, a local headless launch, is never used: without one of them
+ * browser on this host (BROWSER_PROFILE and BROWSER_PORT, browser.ts) or over HTTP, such as the kit's container
+ * (BROWSER_MCP_URL and BROWSER_MCP_TOKEN), a Playwright server (BROWSER_WS_URL and BROWSER_WS_PATH) or a real Chrome
+ * (BROWSER_CDP_URL). Strut's own fallback, a local headless launch, is never used: without one of them
  * every browser verb fails with the reason.
  */
 import { join } from "node:path";
@@ -34,12 +35,12 @@ export function refusingBrowser(reason: string): HostBrowser {
 /** The research browser: Strut's browser, a Playwright server or a real Chrome, never a local launch. */
 export function researchBrowser(opts: ResearchBrowserOptions): HostBrowser {
   if (opts.unblockable) {
-    if (opts.wsUrl || opts.cdpUrl) throw new Error("browser: set BROWSER_PROFILE (Strut's browser) or BROWSER_WS_URL / BROWSER_CDP_URL, not both");
+    if (opts.wsUrl || opts.cdpUrl) throw new Error("browser: set BROWSER_PROFILE or BROWSER_MCP_URL (Strut's browser) or BROWSER_WS_URL / BROWSER_CDP_URL, not both");
     // Browser implements StrutBrowser, the verbs Strut's browser steps call (browser.ts).
     return new Browser(opts.unblockable);
   }
   if (!opts.wsUrl && !opts.cdpUrl) {
-    return refusingBrowser("Strut's browser is not set up on this host: BROWSER_PROFILE (Strut's browser) or BROWSER_WS_URL (a visible Playwright server) is missing. Strut never launches a headless browser of its own.");
+    return refusingBrowser("Strut's browser is not set up on this host: BROWSER_PROFILE (Strut's browser here), BROWSER_MCP_URL (Strut's browser over HTTP) or BROWSER_WS_URL (a visible Playwright server) is missing. Strut never launches a headless browser of its own.");
   }
   return new BrowserService(opts);
 }
@@ -58,7 +59,11 @@ export function browserOptionsFromEnv(env: Record<string, string | undefined>, h
   const setting = (key: string) => env[`BROWSER_${key}`] || env[`BROWSER_LANE_${key}`];
   const profile = setting("PROFILE");
   const node = setting("NODE");
-  const unblockable: BrowserOptions | undefined = profile
+  const mcpUrl = env.BROWSER_MCP_URL;
+  // Over HTTP the browser needs only its URL and token. With BROWSER_PROFILE set too, Browser refuses both.
+  const unblockable: BrowserOptions | undefined = mcpUrl
+    ? { mcp: { url: mcpUrl, token: env.BROWSER_MCP_TOKEN ?? "" }, ...(profile ? { profile } : {}), stepTimeoutMs, runBudgetMs, deny }
+    : profile
     ? {
         root: setting("ROOT") || join(home, ".local", "share", "unblockable-browser"),
         profile,
