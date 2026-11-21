@@ -1,0 +1,13 @@
+Unblockable browser
+Copyright 2026 The unblockable-browser authors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. A copy is in LICENSE.
+
+The installer kit (kits/unblockable-browser) downloads and builds Browser MCP
+(https://github.com/getcabal/browser-mcp, Apache License 2.0) at a pinned
+commit. Browser MCP is not included in this repository.
+
+strut/ is written against Strut (https://github.com/stakwork/strut, Apache
+License 2.0). Its setup script fetches Strut at a pinned commit for building
+and testing; Strut is not included in this repository.

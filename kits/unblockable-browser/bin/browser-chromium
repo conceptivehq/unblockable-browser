@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Starts one browser's visible Chromium. fleet-browser@<profile>.service runs it with the browser's env file
+# (written by the unblockable browser kit); the argument is the profile. It builds the whole command line itself:
+# its own user-data dir, its own stamped extension copy and nothing else, the PAC file (as a data: URL) when the browser is proxied.
+# It never adds a headless or remote-debugging flag, and refuses to start if one were ever in its command line.
+set -euo pipefail
+umask 077
+
+die() {
+  printf 'browser-chromium: %s\n' "$1" >&2
+  exit "${2:-64}"
+}
+
+profile="${1:-}"
+[[ $# -eq 1 && "$profile" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die 'usage: browser-chromium <profile>'
+[[ "${BROWSER_PROFILE:-}" == "$profile" ]] || die "the env file is not the browser ${profile}'s"
+
+root="${BROWSER_ROOT:-}"
+[[ "$root" =~ ^/[A-Za-z0-9._/-]+$ && "$root" != *..* ]] || die 'BROWSER_ROOT must be a plain absolute path'
+[[ -d "$root" && ! -L "$root" ]] || die 'BROWSER_ROOT must be a real folder, not a symlink'
+
+chromium="${BROWSER_CHROMIUM:-}"
+[[ "$chromium" == /* && -x "$chromium" ]] || die 'BROWSER_CHROMIUM must be an executable absolute path' 69
+[[ "${DISPLAY:-}" =~ ^:[0-9]{1,3}$ ]] || die 'DISPLAY must be a local display such as :100'
+
+ext="$root/extensions/$profile"
+for path in "$root/extensions" "$ext"; do
+  [[ -d "$path" && ! -L "$path" ]] || die "$path must be a real folder (run the kit's apply --execute)" 69
+done
+[[ -f "$ext/manifest.json" && ! -L "$ext/manifest.json" ]] || die "$ext holds no extension" 69
+
+data="$root/profiles/$profile"
+for path in "$root/profiles" "$data"; do
+  [[ ! -L "$path" ]] || die "$path must not be a symlink" 73
+done
+mkdir -p -m 700 "$root/profiles" "$data"
+
+# Chromium keeps an extension's service worker in the profile's script cache and runs that copy again while the
+# extension's version is unchanged, so a new Browser MCP build would never run. When the extension copy differs from
+# the one this profile last started with, its service worker storage goes (logins and cookies are elsewhere and stay).
+sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }
+stamp="$data/fleet-extension.sha256"
+# Each file's name, then its bytes, in a fixed order (the packaged copy's names hold no newline).
+sum="$(cd "$ext" && LC_ALL=C find . -type f | LC_ALL=C sort | while IFS= read -r f; do printf '%s\0' "$f"; cat -- "$f"; done | sha256 | cut -d' ' -f1)"
+[[ ! -L "$stamp" ]] || die "$stamp must not be a symlink" 73
+if [[ ! -f "$stamp" || "$(cat "$stamp")" != "$sum" ]]; then
+  workers="$data/Default/Service Worker"
+  [[ ! -L "$data/Default" && ! -L "$workers" ]] || die "$workers must not be a symlink" 73
+  if [[ -d "$workers" ]]; then
+    rm -r -- "$workers"
+  fi
+  printf '%s\n' "$sum" > "$stamp"
+fi
+
+args=(
+  "--user-data-dir=$data"
+  "--load-extension=$ext"
+  "--disable-extensions-except=$ext"
+  --disable-backgrounding-occluded-windows
+  --no-first-run
+  --no-default-browser-check
+  --password-store=basic
+  --webrtc-ip-handling-policy=disable_non_proxied_udp
+  --force-webrtc-ip-handling-policy=disable_non_proxied_udp
+  # A desktop-wide first window on the 1920x1080 display. Job windows cascade inside it (32 px a step), so they
+  # stay wider than tablet layouts' breakpoints; without it Chromium picks about 980 px.
+  --window-position=0,0
+  --window-size=1600,1000
+)
+
+pac="${BROWSER_PAC:-}"
+if [[ -n "$pac" ]]; then
+  [[ "$pac" == "$root/pac/$profile.pac" ]] || die 'BROWSER_PAC must be the browser'"'"'s own PAC file'
+  [[ -f "$pac" && ! -L "$pac" && ! -L "$root/pac" ]] || die "$pac must be a regular file" 69
+  # Chromium stopped loading PAC scripts from file:// URLs (156 ignores one without a word), so the browser's own PAC
+  # file goes in as a data: URL. It holds host names and the loopback forwarder's address, never a credential.
+  args+=("--proxy-pac-url=data:application/x-ns-proxy-autoconfig;base64,$(base64 < "$pac" | tr -d '\n')")
+fi
+args+=(--new-window about:blank)
+
+for arg in "${args[@]}"; do
+  case "$arg" in
+    *headless* | *remote-debugging*) die "refusing a forbidden flag: $arg" 70 ;;
+  esac
+done
+
+# Debian's /usr/bin/chromium wrapper reads extra flags from these; the browser runs the binary itself and takes none.
+unset CHROMIUM_FLAGS CHROME_FLAGS
+exec "$chromium" "${args[@]}"

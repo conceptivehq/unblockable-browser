@@ -1,0 +1,62 @@
+# Reads one page in Strut's browser: opens it, optionally waits for text, reads the whole page or one
+# region (a CSS, text= or role= selector), photographs it and closes the run's window. Read-only.
+#
+# Input:  { url, selector?, wait_for? }
+# Output: { url, title, status, text, screenshot }
+input:
+  url:
+    type: string
+    description: The page to read (http or https).
+  selector:
+    type: string
+    default: ''
+    description: 'The region to read, such as main, #pricing, text=Plans or role=region[name=Pricing]; the whole page when empty.'
+  wait_for:
+    type: string
+    default: ''
+    description: Text to wait for before reading (for pages that load late); no wait when empty.
+steps:
+  - id: open
+    type: browser/open
+    depends: []
+    config:
+      url: '{{ input.url }}'
+
+  # A gate, not a container: the wait below runs only when there is text to wait for.
+  - id: has_wait
+    type: if
+    depends: [open]
+    config:
+      cond: "{{ input.wait_for !== '' }}"
+
+  - id: wait
+    type: browser/wait
+    depends: has_wait
+    when: true
+    config:
+      text: '{{ input.wait_for }}'
+      timeoutMs: 30000
+
+  - id: read
+    type: browser/text
+    depends: [has_wait, wait]
+    config:
+      selector: '{{ input.selector }}'
+
+  - id: shot
+    type: browser/screenshot
+    depends: [read]
+
+  - id: done
+    type: browser/close
+    depends: [shot]
+
+  - id: result
+    type: pack
+    depends: [done]
+    config:
+      url: '{{ open.url }}'
+      title: '{{ open.title }}'
+      status: '{{ open.status }}'
+      text: '{{ read.text }}'
+      screenshot: '{{ shot.url }}'

@@ -1,0 +1,14 @@
+# Written by the unblockable browser kit (kits/unblockable-browser/unblockable_browser.py). Do not edit; apply rewrites it.
+# The virtual display the browsers' browsers draw on. Instance: the display number. The browsers are visible ones;
+# this server has no screen, so the screen is Xvfb's. No TCP listener: only local clients draw on it.
+[Unit]
+Description=Unblockable browser: virtual display :%i
+
+[Service]
+Type=simple
+ExecStart=@XVFB@ :%i -screen 0 1920x1080x24 -nolisten tcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

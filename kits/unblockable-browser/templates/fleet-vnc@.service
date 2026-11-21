@@ -1,0 +1,17 @@
+# Written by the unblockable browser kit (kits/unblockable-browser/unblockable_browser.py). Do not edit; apply rewrites it.
+# Installed only with "vnc": true. A view of display :%i for a person who helps with a CAPTCHA or a sign-in.
+# It listens on 127.0.0.1 only, with no password: reach it through an SSH tunnel, never by opening the port.
+[Unit]
+Description=Unblockable browser: VNC view of display :%i on loopback
+Requires=fleet-xvfb@%i.service
+After=fleet-xvfb@%i.service
+
+[Service]
+Type=simple
+ExecStart=@X11VNC@ -display :%i -localhost -noipv6 -rfbport @VNC_PORT@ -nopw -shared -forever -quiet
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

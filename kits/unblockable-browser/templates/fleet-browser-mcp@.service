@@ -1,0 +1,21 @@
+# Written by the unblockable browser kit (kits/unblockable-browser/unblockable_browser.py). Do not edit; apply rewrites it.
+# One browser's broker: it runs the browser's one Browser MCP server and shares it between the agent's MCP clients (the
+# Hermes gateway and, on Codex's app-server, each Codex thread) over a unix socket in @ROOT@/run. Instance: the
+# Hermes profile name. bin/browser-mcp starts it on demand.
+[Unit]
+Description=Unblockable browser: shared Browser MCP server for %i
+
+[Service]
+Type=simple
+EnvironmentFile=@ROOT@/browsers/%i.env
+Environment=BROWSER_NODE=@NODE@
+ExecStart=@NODE@ @ROOT@/bin/browser-broker.mjs serve
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# The stdio MCP command for one browser (the unblockable browser kit). A profile's config.yaml names it under
+# mcp_servers.browser with BROWSER_ROOT, BROWSER_PROFILE and BROWSER_PORT (and optionally
+# BROWSER_NODE); Hermes runs it, and so does Codex for each thread when the profile runs on Codex's app-server.
+# It checks them, makes sure the browser's broker (fleet-browser-mcp@<profile>.service) is running, then relays stdio to
+# the broker's socket. The broker runs the browser's one Browser MCP server and shares it between every client, so a
+# second client never finds the extension port taken.
+set -euo pipefail
+umask 077
+
+die() {
+  printf 'browser-mcp: %s\n' "$1" >&2
+  exit "${2:-64}"
+}
+
+# The BROWSER_LANE_* names from before 0.8.0 still work for one release.
+root="${BROWSER_ROOT:-${BROWSER_LANE_ROOT:-}}"
+profile="${BROWSER_PROFILE:-${BROWSER_LANE_PROFILE:-}}"
+port="${BROWSER_PORT:-${BROWSER_LANE_PORT:-}}"
+
+[[ "$profile" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die 'BROWSER_PROFILE must match ^[a-z0-9][a-z0-9-]{0,40}$'
+[[ "$port" =~ ^[0-9]{4,5}$ ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || die 'BROWSER_PORT must be an integer from 1024 to 65535'
+port=$((10#$port))
+[[ "$root" =~ ^/[A-Za-z0-9._/-]+$ && "$root" != *..* ]] || die 'BROWSER_ROOT must be a plain absolute path'
+[[ -d "$root" && ! -L "$root" ]] || die 'BROWSER_ROOT must be a real folder, not a symlink'
+
+browser_env="$root/browsers/$profile.env"
+[[ -f "$browser_env" && ! -L "$browser_env" ]] || die "no browser ${profile} under $root (run the kit's apply --execute)" 69
+browser_port="$(sed -n 's/^BROWSER_PORT=\([0-9]*\)$/\1/p' "$browser_env" | head -n 1)"
+[[ "$browser_port" == "$port" ]] || die "the browser ${profile} uses port ${browser_port:-none}, not ${port}"
+
+broker="$root/bin/browser-broker.mjs"
+[[ -f "$broker" && ! -L "$broker" ]] || die "$broker is missing or a symlink (run the kit's apply --execute)" 69
+
+node="${BROWSER_NODE:-${BROWSER_LANE_NODE:-$HOME/.local/bin/node}}"
+[[ "$node" == /* && -x "$node" ]] || node="$(command -v node || true)"
+[[ -n "$node" && -x "$node" ]] || die 'Node.js was not found (set BROWSER_NODE)' 69
+
+# Hermes passes XDG_* through and Codex does not; without it systemctl --user cannot find this user's manager.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+unit="fleet-browser-mcp@${profile}.service"
+if ! systemctl --user is-active --quiet "$unit"; then
+  systemctl --user start "$unit" || die "could not start $unit" 69
+fi
+
+exec "$node" "$broker" connect "$root/run/$profile.sock"

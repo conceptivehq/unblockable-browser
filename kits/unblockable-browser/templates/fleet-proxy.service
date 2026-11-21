@@ -1,0 +1,23 @@
+# Written by the unblockable browser kit (kits/unblockable-browser/unblockable_browser.py). Do not edit; apply rewrites it.
+# Installed only when a proxy uses "auth": "password". A loopback forwarder that adds the residential proxy's
+# credentials, so they never reach a browser's command line, a PAC file or a log. The env file holds PROXY_SERVER,
+# PROXY_USERNAME and PROXY_PASSWORD; a person writes it, mode 600. The forwarder refuses a non-loopback address.
+[Unit]
+Description=Unblockable browser: loopback forwarder to the residential proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=FORWARD_BIND=127.0.0.1
+Environment=FORWARD_PORT=@FORWARD_PORT@
+EnvironmentFile=@PROXY_ENV_FILE@
+ExecStart=@NODE@ @ROOT@/bin/proxy-forward.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

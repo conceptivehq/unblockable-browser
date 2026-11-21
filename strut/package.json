@@ -1,0 +1,22 @@
+{
+  "name": "unblockable-browser-strut",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Strut's browser: a StrutBrowser that drives the unblockable browser through Browser MCP.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "npm ci && node scripts/setup-strut.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3"
+  }
+}

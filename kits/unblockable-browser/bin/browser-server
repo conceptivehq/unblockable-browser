@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# One browser's Browser MCP server (the unblockable browser kit). The browser's broker
+# (fleet-browser-mcp@<profile>.service, bin/browser-broker.mjs) runs it, with BROWSER_ROOT,
+# BROWSER_PROFILE and BROWSER_PORT (and optionally BROWSER_NODE) from the browser's env file. It checks
+# them, makes sure the browser's Chromium (fleet-browser@<profile>.service) is running, then becomes the Browser MCP server: MCP over stdio, the
+# extension on 127.0.0.1:<port>, refusing an extension stamped for another profile.
+set -euo pipefail
+umask 077
+
+die() {
+  printf 'browser-server: %s\n' "$1" >&2
+  exit "${2:-64}"
+}
+
+root="${BROWSER_ROOT:-}"
+profile="${BROWSER_PROFILE:-}"
+port="${BROWSER_PORT:-}"
+
+[[ "$profile" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die 'BROWSER_PROFILE must match ^[a-z0-9][a-z0-9-]{0,40}$'
+[[ "$port" =~ ^[0-9]{4,5}$ ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || die 'BROWSER_PORT must be an integer from 1024 to 65535'
+port=$((10#$port))
+[[ "$root" =~ ^/[A-Za-z0-9._/-]+$ && "$root" != *..* ]] || die 'BROWSER_ROOT must be a plain absolute path'
+[[ -d "$root" && ! -L "$root" ]] || die 'BROWSER_ROOT must be a real folder, not a symlink'
+
+browser_env="$root/browsers/$profile.env"
+[[ -f "$browser_env" && ! -L "$browser_env" ]] || die "no browser ${profile} under $root (run the kit's apply --execute)" 69
+browser_port="$(sed -n 's/^BROWSER_PORT=\([0-9]*\)$/\1/p' "$browser_env" | head -n 1)"
+[[ "$browser_port" == "$port" ]] || die "the browser ${profile} uses port ${browser_port:-none}, not ${port}"
+
+current="$root/current"
+[[ -f "$current" && ! -L "$current" ]] || die "$current is missing (run the kit's apply --execute)" 69
+commit="$(head -n 1 "$current")"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "$current must hold a full commit sha"
+cli="$root/browser-mcp/$commit/server/dist/cli.js"
+for path in "$root/browser-mcp" "$root/browser-mcp/$commit" "$cli"; do
+  [[ -e "$path" && ! -L "$path" ]] || die "$path is missing or a symlink" 69
+done
+
+node="${BROWSER_NODE:-$HOME/.local/bin/node}"
+[[ "$node" == /* && -x "$node" ]] || node="$(command -v node || true)"
+[[ -n "$node" && -x "$node" ]] || die 'Node.js was not found (set BROWSER_NODE)' 69
+
+# Hermes passes XDG_* through; without it systemctl --user cannot find this user's manager.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+unit="fleet-browser@${profile}.service"
+if ! systemctl --user is-active --quiet "$unit"; then
+  systemctl --user start "$unit" || die "could not start $unit" 69
+fi
+
+exec "$node" "$cli" start \
+  --extension-port "$port" \
+  --profile "$profile" \
+  --require-extension \
+  --extension-connect-timeout 90000

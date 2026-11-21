@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "display": 100,
+  "vnc": false,
+  "chromium": "/usr/lib/chromium/chromium",
+  "node": "~/.local/bin/node",
+  "root": "~/.local/share/unblockable-browser",
+  "browser_mcp": {
+    "repo": "https://github.com/getcabal/browser-mcp",
+    "commit": "0000000000000000000000000000000000000000"
+  },
+  "browsers": [
+    {
+      "profile": "examplemarketing",
+      "port": 21201,
+      "hermes_home": "~/.hermes/profiles/examplemarketing",
+      "proxy": "residential",
+      "timezone": "America/Los_Angeles"
+    },
+    {
+      "profile": "examplesupport",
+      "port": 21202,
+      "hermes_home": "~/.hermes/profiles/examplesupport",
+      "proxy": "none"
+    },
+    {
+      "profile": "strut",
+      "port": 21203,
+      "client": "strut",
+      "proxy": "residential",
+      "timezone": "America/Los_Angeles"
+    }
+  ],
+  "proxies": {
+    "residential": {
+      "env_file": "~/.config/unblockable-browser/proxy.env",
+      "pac_hosts": [
+        "reviews.example",
+        "jobs.example",
+        "challenges.cloudflare.com"
+      ],
+      "auth": "allowlist"
+    }
+  }
+}

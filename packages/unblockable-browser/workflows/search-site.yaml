@@ -1,0 +1,88 @@
+# A declared route through a site in Strut's browser: opens a page, fills its search box, presses Enter,
+# waits for the results, reads them and photographs them. The author names the elements with selectors
+# (CSS, text= or role=), so no model is involved.
+#
+# Input:  { url, search_box, query, results?, expect_text? }
+# Output: { url, text, screenshot }
+input:
+  url:
+    type: string
+    description: The page with the search box (http or https).
+  search_box:
+    type: string
+    description: 'The search box, such as input[type=search], #q or role=searchbox[name=Search].'
+  query:
+    type: string
+    description: What to search for.
+  results:
+    type: string
+    default: ''
+    description: 'The results region to read, such as main or #results; the whole page when empty.'
+  expect_text:
+    type: string
+    default: ''
+    description: Text the results page shows once it has loaded; waits two seconds when empty.
+steps:
+  - id: open
+    type: browser/open
+    depends: []
+    config:
+      url: '{{ input.url }}'
+
+  - id: fill
+    type: browser/fill
+    depends: [open]
+    config:
+      selector: '{{ input.search_box }}'
+      value: '{{ input.query }}'
+
+  - id: submit
+    type: browser/press
+    depends: [fill]
+    config:
+      key: Enter
+
+  - id: has_text
+    type: if
+    depends: [submit]
+    config:
+      cond: "{{ input.expect_text !== '' }}"
+
+  - id: wait_text
+    type: browser/wait
+    depends: has_text
+    when: true
+    config:
+      text: '{{ input.expect_text }}'
+      timeoutMs: 30000
+
+  - id: wait_settle
+    type: browser/wait
+    depends: has_text
+    when: false
+    config:
+      ms: 2000
+
+  - id: read
+    type: browser/text
+    depends: [wait_text, wait_settle]
+    config:
+      selector: '{{ input.results }}'
+
+  - id: shot
+    type: browser/screenshot
+    depends: [read]
+    config:
+      name: results
+
+  - id: done
+    type: browser/close
+    depends: [shot]
+
+  - id: result
+    type: pack
+    depends: [done]
+    config:
+      url: '{{ submit.url }}'
+      text: '{{ read.text }}'
+      screenshot: '{{ shot.url }}'

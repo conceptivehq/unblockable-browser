@@ -1,0 +1,83 @@
+# Proves Strut's browser works: opens a probe page, waits for its text, reads its accessibility tree,
+# photographs it, then reads the address the web sees (an IP echo page) and closes the run's window.
+# Read-only: it signs in nowhere, types into nothing and clicks nothing.
+#
+# Input:  { probe_url?, expect_text?, wait_ms?, ip_url? }
+# Output: { outcome: ok | changed | no_ip, egress_ip, title, tree_chars, screenshot, error }
+input:
+  probe_url:
+    type: string
+    default: https://example.com
+    description: A page the browser should open (http or https).
+  expect_text:
+    type: string
+    default: Example Domain
+    description: Text the probe page shows once it has loaded; its absence marks the page as changed or blocked.
+  wait_ms:
+    type: number
+    default: 20000
+    description: How long to wait for expect_text, in milliseconds.
+  ip_url:
+    type: string
+    default: https://api.ipify.org
+    description: A page whose whole text is the caller's IP address.
+steps:
+  - id: open
+    type: browser/open
+    depends: []
+    config:
+      url: '{{ input.probe_url }}'
+
+  - id: loaded
+    type: browser/wait
+    depends: [open]
+    config:
+      text: '{{ input.expect_text }}'
+      timeoutMs: '{{ input.wait_ms }}'
+    options:
+      onError:
+        id: loaded_failed
+        type: pack
+        config:
+          error: '{{ $error.message }}'
+
+  - id: tree
+    type: browser/snapshot
+    depends: [loaded]
+
+  - id: shot
+    type: browser/screenshot
+    depends: [tree]
+    config:
+      name: browser-check
+
+  - id: ip_page
+    type: browser/goto
+    depends: [shot]
+    config:
+      url: '{{ input.ip_url }}'
+    options:
+      onError:
+        id: ip_page_failed
+        type: pack
+        config:
+          error: '{{ $error.message }}'
+
+  - id: ip
+    type: browser/text
+    depends: [ip_page]
+
+  - id: done
+    type: browser/close
+    depends: [ip]
+
+  - id: result
+    type: pack
+    depends: [done]
+    config:
+      outcome: '{{ loaded.error ? ''changed'' : (ip_page.error ? ''no_ip'' : ''ok'') }}'
+      egress_ip: '{{ ip_page.error ? '''' : ip.text }}'
+      title: '{{ tree.title }}'
+      tree_chars: '{{ tree.tree.length }}'
+      screenshot: '{{ shot.url }}'
+      error: '{{ loaded.error || ip_page.error || '''' }}'

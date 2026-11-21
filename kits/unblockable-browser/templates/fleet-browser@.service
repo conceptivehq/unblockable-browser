@@ -1,0 +1,21 @@
+# Written by the unblockable browser kit (kits/unblockable-browser/unblockable_browser.py). Do not edit; apply rewrites it.
+# One agent's visible Chromium on the virtual display. Instance: the Hermes profile name. The launcher builds the
+# whole command line from the browser's env file and refuses any headless or remote-debugging flag.
+[Unit]
+Description=Unblockable browser: visible Chromium for %i
+Requires=fleet-xvfb@@DISPLAY@.service
+After=fleet-xvfb@@DISPLAY@.service
+
+[Service]
+Type=simple
+EnvironmentFile=@ROOT@/browsers/%i.env
+ExecStart=@ROOT@/bin/browser-chromium %i
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
