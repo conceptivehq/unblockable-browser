@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 (November 27, 2026)
+
+- The container is the setup. The package README and Concepts now describe running the container and giving Strut `BROWSER_MCP_URL` and `BROWSER_MCP_TOKEN`, which Strut's own `McpBrowser` (Strut `b235947` or newer) uses. The systemd install through the kit stays available and is described as the way without Docker.
+- The package `conceptive/unblockable-browser` 0.3.0 drops `requires.binaries`: Chromium, Xvfb and Browser MCP live in the container, so the Strut server needs none of them.
+- The container is published on GitHub's container registry for amd64 and arm64, tagged by version (`ghcr.io/conceptivehq/unblockable-browser:0.3.0`, `:0.3` and `:latest`), by `.github/workflows/image.yml` when a version tag is pushed.
+- The setup recommends a `BROWSER_URL_DENY` that also keeps pages off loopback and private networks, since Strut's default list covers only `file:` and cloud metadata.
+
 ## 0.2.0 (November 20, 2026)
 
 - MCP over HTTP: `kits/unblockable-browser/bin/browser-mcp-http.mjs` serves a browser's MCP as Streamable HTTP at `POST /mcp` behind a bearer token, through the browser's broker. Plain Node, no packages.

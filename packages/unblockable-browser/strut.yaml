@@ -1,12 +1,4 @@
 package: conceptive/unblockable-browser
-version: 0.2.3
-description: Strut's own unblockable browser, a visible Chromium on a Linux virtual display that Strut drives through Browser MCP, plus four workflows built from Strut's browser steps (check the browser, read a page, search a site, explore with an agent).
+version: 0.3.0
+description: Strut's unblockable browser, a visible Chromium in one container that Strut drives through Browser MCP over HTTP (BROWSER_MCP_URL and BROWSER_MCP_TOKEN), plus four workflows built from Strut's browser steps (check the browser, read a page, search a site, explore with an agent).
 license: Apache-2.0
-requires:
-  binaries:
-    - chromium
-    - Xvfb
-    - node
-    - python3
-    - git
-    - npm

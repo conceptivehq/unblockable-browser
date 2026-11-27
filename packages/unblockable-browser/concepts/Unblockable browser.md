@@ -1,14 +1,18 @@
 ---
 name: Unblockable browser
-description: Strut's own visible Chromium on a Linux host, which Strut drives through Browser MCP and its extension instead of a Playwright server.
+description: A visible Chromium in one container that Strut drives through Browser MCP over HTTP (BROWSER_MCP_URL and BROWSER_MCP_TOKEN) instead of a Playwright server.
 ---
-The unblockable browser gives Strut a real browser of its own on a headless Linux server, without ever running the browser headless. Sites see an ordinary desktop Chrome: a visible window, a real extension, a normal profile that keeps its cookies, and (where a browser names one) a residential address.
+The unblockable browser gives Strut a real browser of its own on a headless server, without ever running the browser headless. Sites see an ordinary desktop Chrome: a visible window, a real extension, a normal profile that keeps its cookies, and (where you name one) a residential address.
 
-- **Chromium** runs visibly on a virtual display (Xvfb, display :100 by default) under the systemd user unit `fleet-browser@<profile>.service` (profile `strut`), with its own user-data folder. Its first window is 1600×1000, so each run's window gets desktop layouts.
-- **The extension** is a physical copy of Browser MCP's extension, stamped for Strut's browser and its port and loaded with `--load-extension`. It refuses a server for another browser.
-- **The server** is Browser MCP's Node server, run by the browser's broker (`fleet-browser-mcp@<profile>.service`) on 127.0.0.1:<port> only.
-- **Strut's host** spawns the kit's stdio adapter `browser-mcp` once and keeps it. Each run gets a window of its own (`BROWSER_MCP_PAGE_ISOLATION=window`), closed when the run ends.
+Everything the browser needs is in one container image:
 
-The chain: a `browser/*` step → Strut's host (`Browser`) → stdio `browser-mcp` → the broker → the server on 127.0.0.1:<port> ⇄ the extension in Strut's Chromium on Xvfb.
+- **Chromium** runs visibly on a virtual display (Xvfb) as an unprivileged user, with its sandbox on. Its profile lives on a volume, so sign-ins and cookies survive restarts and image updates.
+- **The extension** is a copy of Browser MCP's extension, stamped for the image's profile and port and refusing any other server.
+- **Browser MCP's server** listens only on the container's loopback, started by the kit's broker.
+- **The HTTP front** serves MCP's Streamable HTTP at `POST /mcp` on port 8930 behind a bearer token of 32 or more characters, and answers `/healthz` for the container's health check. It never logs the token or a call's arguments.
 
-The browser never uses `--headless`, `--remote-debugging-port` or `--remote-debugging-pipe`, never shares a profile folder, and never puts a credential on a command line. The kit's `kits/unblockable-browser/unblockable_browser.py` installs it from a config file (a browser with `"client": "strut"`), and the host uses it when `BROWSER_PROFILE` and `BROWSER_PORT` are set. Every workflow in this package drives it with the [[Unblockable browser steps]].
+To use it, run the container and give Strut two settings: `BROWSER_MCP_URL` (for example `http://127.0.0.1:8930/mcp`) and `BROWSER_MCP_TOKEN`. Strut then picks `McpBrowser` (Strut `b235947` or newer), which keeps one MCP session and opens a new one if the container drops it. Each run gets a window of its own, closed when the run ends.
+
+The chain: a `browser/*` step → Strut (`McpBrowser`) → HTTP with the token → the container's front → the broker → Browser MCP's server ⇄ the extension in Chromium on Xvfb.
+
+The browser never uses `--headless`, `--remote-debugging-port` or `--remote-debugging-pipe`, and never puts a credential on a command line. Publish the front on loopback or a private network, never on a public address. Every workflow in this package drives it with the [[Unblockable browser steps]].

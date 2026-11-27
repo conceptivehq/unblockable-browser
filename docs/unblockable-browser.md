@@ -83,6 +83,8 @@ A browser with `"client": "strut"` is Strut's: Strut's host is its only client, 
 
 Strut's host can instead reach a browser over HTTP, such as the container below: set `BROWSER_MCP_URL` (`http://127.0.0.1:8930/mcp`) and `BROWSER_MCP_TOKEN` in place of `BROWSER_PROFILE` and the rest. The host then speaks MCP's Streamable HTTP to it with the token, and the verbs work as they do over stdio. Setting both kinds refuses to start.
 
+Strut itself does the same from commit `b235947`: its `McpBrowser`, ported from this adapter, is picked when `BROWSER_MCP_URL` is set, so a plain Strut server needs only the container and those two settings. It retries a call once on a new session when the container has dropped the old one. Its default deny list (`BROWSER_URL_DENY`) covers only `file:`, `169.254.0.0/16` and `fd00::/8`; widen it to loopback and private ranges (the package README gives a value), since from inside the container they include the browser's own ports.
+
 ## MCP over HTTP
 
 `bin/browser-mcp-http.mjs` serves a browser's MCP over HTTP, for a client on another machine or in another container: MCP's Streamable HTTP at `POST /mcp`, behind a bearer token. It is plain Node with no packages, and it talks to the browser's broker, so its clients share the browser's one Browser MCP server with any stdio client. The container below runs it; on a host with the kit installed, run it as the browser's user beside the broker.
@@ -178,7 +180,7 @@ Agents stop at a CAPTCHA or human check and say so; they never solve or get arou
 
 ## The Strut package
 
-`packages/unblockable-browser/` is the Strut package `conceptive/unblockable-browser` 0.2.3, for Strut's browser. Its four workflows are made of Strut's `browser/*` steps (the host's `research` plugin registers them, beside the restricted `agent`), so the same toolset works in any workflow:
+`packages/unblockable-browser/` is the Strut package `conceptive/unblockable-browser` 0.3.0, for Strut's browser. Its setup is the container and two settings, `BROWSER_MCP_URL` and `BROWSER_MCP_TOKEN`; it names no programs the Strut server must have. Its four workflows are made of Strut's `browser/*` steps (on a host with its own step list, its `research` plugin registers them, beside the restricted `agent`), so the same toolset works in any workflow:
 
 | Workflow | Kind | What it does |
 | --- | --- | --- |
